@@ -1,0 +1,248 @@
+###############################################################################
+# Project:    ANNOTATION AND PHYLOGENETIC ANALYSIS OF SACCHAROMYCES GENES     #
+#             RELATED WITH CARBON SOURCES OF BREWING INTEREST                 #
+# Author:     Laura Varón Pozuelo                                             #
+# Date:       2024-10-27                                                      #  
+# Script:     analysis_pipeline.Rmd (RMarkdown)                               #  
+#                                                                             #
+# Description:                                                                #
+# This pipeline processes proteome datasets to:                               #
+#   1. Import reference genes from FASTA.                                     #
+#   2. Parse proteome FASTA files per strain (contigs).                       # 
+#   3. Load BLAST results against target genes.                               #          
+#   4. Select best hits (filters + overlaps).                                 #
+#   5. Annotate strain species.                                               #  
+#   6. Identify copy number variation (CNV).                                  #
+#   8. Export curated sequences per strain in FASTA format.                   #  
+#                                                                             #
+# Input files/directories:                                                    #  
+#   - general/genes_aa.fasta        (reference protein sequences)             #
+#   - proteomes/*.fasta|fa          (strain proteomes)                        #
+#   - blast/*.tsv                   (BLAST results)                           #   
+#   - proteomes/aa_hits/*.faa (amino acid hits)                               #
+#                                                                             #
+# Outputs:                                                                    #
+#   - CNV.tsv                       (copy number variation summary)           #
+#   - proteomes/aa_hits/*.faa (exported FASTA per strain)                     #
+#                                                                             #
+###############################################################################
+
+
+```{r setup, include=FALSE}
+# Project setup
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+rm(list=ls())
+library(pacman)
+pacman::p_load(
+  dplyr, tidyr, ggplot2, ggtext, viridis, stringr, purrr, Biostrings)
+base_dir      <- "."
+proteomes_dir <- file.path(base_dir, "proteomes")
+blast_dir     <- file.path(base_dir, "blast")
+genes_dir     <- file.path(base_dir, "general")
+stats_dir     <- file.path(base_dir, "stats")
+hits_dir      <- file.path(base_dir, "hits")
+faa_dir       <- file.path(proteomes_dir, "aa_hits")
+```
+
+
+```{r helpers}
+# Helper functions
+
+# Keep only the target genes of interest (IMA, MAL, MTT1/MTY1 families)
+valid_genes <- function(df) {
+  df %>% filter(
+    grepl("^IMA[0-3]$", gene) |
+    gene == "IMA5" |
+    grepl("^MAL[0-9]{2}$", gene) |
+    grepl("^MT[T|Y]1$", gene)
+  )
+}
+
+# Check if two intervals [S1,E1] and [S2,E2] overlap
+overlap <- function(S1, E1, S2, E2) {
+  !(E1 < S2 || E2 < S1)
+}
+```
+
+
+```{r genes}
+# ====================
+# Import and parse gene fasta file
+# ====================
+
+# Read fasta file with gene sequences
+genes_lines <- readLines(file.path(genes_dir, "genes_aa.fasta"))
+
+# Extract headers (lines starting with ">")
+genes_info  <- gsub("^>", "", grep("^>", genes_lines, value = TRUE))
+
+# Build tibble with basic gene information
+genes_df <- tibble(
+  gene       = sub(" .*", "", genes_info), # gene name
+  reference  = str_extract(
+    genes_info, "(?<=organism=)[^]]+"), # reference organism
+  chromosome = str_extract(
+    genes_info, "(?<=chromosome=)[^]]+") # chromosome info
+) %>%
+  mutate(across(everything(), ~replace_na(.x, "")))
+
+head(genes_df)
+```
+
+
+```{r contigs}
+# ====================
+# Parse contig names for each strain
+# ====================
+
+# Get all proteome fasta files
+strain_files <- list.files(proteomes_dir, pattern = "\.(fasta|fa)$")
+strains      <- gsub("\.(fasta|fa)$", "", strain_files)
+
+# Extract contig names from fasta headers
+contigs_list <- map(strain_files, function(f) {
+  contigs <- grep("^>", readLines(file.path(proteomes_dir, f)), value = TRUE)
+  sapply(
+    strsplit(
+      sub(
+        "^>", paste0(gsub("\.(fasta|fa)$", "", f), "_", contigs)), " "), `[`, 1)
+})
+
+names(contigs_list) <- strains
+
+# Combine into wide dataframe
+contigs_df <- bind_cols(contigs_list)
+head(contigs_df)
+```
+
+
+```{r blast}
+# ====================
+# Read BLAST output results
+# ====================
+
+# Load BLAST results (tab-delimited TSV format)
+blast_files <- list.files(blast_dir, pattern = "\.tsv$", full.names = TRUE)
+
+df <- map_dfr(blast_files, read.delim, sep = "\t", .id = "source") %>%
+  mutate(
+    strain = sub("_.*", "", accession),         # extract strain from accession
+    chr    = str_extract(accession, "chr[^_\-]*")      # extract chromosome id
+  ) %>%
+  filter(X.match >= 90, coverage >= 90) # quality thresholds
+
+head(df)
+
+```
+
+
+```{r correct_hits}
+# ====================
+# Select the best hit per gene per strain
+# ====================
+
+# Split BLAST df by strain
+dataframes_list <- split(df, df$strain)
+
+# Process each strain separately
+correct_hits <- map(dataframes_list, function(d) {
+  if (nrow(d) <= 1) return(valid_genes(d)) # shortcut if only one hit
+  
+  d <- d %>%
+    arrange(accession, start) %>%
+    mutate(group = 0)
+  
+  group_counter <- 0
+  for (j in 2:nrow(d)) {
+    same_acc <- d$accession[j] == d$accession[j-1]
+    if (same_acc && overlap(d$start[j-1], d$end[j-1], d$start[j], d$end[j])) {
+      # Group overlapping hits
+      d$group[c(j-1, j)] <- group_counter
+    } else {
+      # Otherwise, start a new group
+      group_counter <- group_counter + 1
+      d$group[j] <- group_counter
+    }
+  }
+  
+  # Within each group keep the best hit (by score and coverage)
+  d %>%
+    group_by(group) %>%
+    slice_max(order_by = identity, n = 1, with_ties = FALSE) %>%
+    slice_max(order_by = coverage, n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    valid_genes()
+})
+
+# Concatenate results across strains
+combined_df <- bind_rows(correct_hits, .id = "strain")
+head(combined_df)
+```
+
+
+```{r strain_species}
+# ====================
+# Annotate species for each strain
+# ====================
+
+strain_species <- read.delim(
+  file.path(genes_dir, "strain_species.tsv"), 
+  sep = "\t", header = TRUE, stringsAsFactors = FALSE
+) %>%
+  as_tibble()
+
+# Add species annotation to combined BLAST results
+combined_df <- left_join(combined_df, strain_species, by = "strain")
+head(combined_df)
+```
+
+
+```{r cnv}
+# ====================
+# Detect Copy Number Variation (CNV)
+# ====================
+
+# Count gene copies per strain and chromosome
+CNV_correct <- combined_df %>%
+  filter(!is.na(group)) %>%  
+  count(gene, species, strain, accession, name = "n_copies") %>%
+  arrange(strain)
+
+# Save CNV results to file
+write.table(
+  CNV_correct, file = "CNV.tsv", sep = "\t", row.names = FALSE, quote = FALSE)
+
+# Collapse by strain/species -> total copies
+CNV_total <- CNV_correct %>%
+  group_by(gene, strain, species) %>%
+  summarise(n_copies = sum(n_copies), .groups = "drop")
+
+head(CNV_total)
+```
+
+
+```{r export_fasta}
+# ====================
+# Export selected hit sequences in FASTA format per strain
+# ====================
+
+# Load amino acid sequences from all .faa files
+faa_files <- list.files(faa_dir, pattern = "\.faa$", full.names = TRUE)
+seq_df <- map_dfr(faa_files, function(f){
+  fa <- readAAStringSet(f)
+  tibble(header = names(fa), sequence = as.character(fa))
+})
+
+# Export sequences for each strain separately
+walk2(correct_hits, names(correct_hits), function(d, name) {
+  d <- d %>%
+    mutate(full_accession = accession) %>%
+    left_join(seq_df, by = c("full_accession" = "header")) %>%
+    mutate(header = paste0(">", gene, "_", full_accession)) %>%
+    filter(!is.na(sequence))
+  
+  fasta_lines <- map2_chr(d$header, d$sequence, ~paste(.x, .y, sep = "\n"))
+  output_path <- file.path(faa_dir, paste0(name, ".faa"))
+  writeLines(fasta_lines, output_path)
+})
+```
