@@ -3,7 +3,7 @@
 #             RELATED WITH CARBON SOURCES OF BREWING INTEREST                 #
 # Author:     Laura Varón Pozuelo                                             #
 # Date:       2024-10-27                                                      #  
-# Script:     analysis_pipeline.Rmd (RMarkdown)                               #  
+# Script:     data_curation.Rmd (RMarkdown)                                   #  
 #                                                                             #
 # Description:                                                                #
 # This pipeline processes proteome datasets to:                               #
