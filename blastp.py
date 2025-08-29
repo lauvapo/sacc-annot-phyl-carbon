@@ -24,7 +24,6 @@ proteomes_dir = os.path.join(base_dir, "proteomes")
 blast_dir = os.path.join(base_dir, "blast")
 db_dir = os.path.join(blast_dir, "db")
 genes_dir = os.path.join(base_dir, "general")
-stats_dir = os.path.join(base_dir, "stats")
 hits_dir = os.path.join(base_dir, "hits")
 faa_dir = os.path.join(proteomes_dir, "aa_hits")
 
