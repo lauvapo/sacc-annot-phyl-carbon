@@ -39,7 +39,6 @@ base_dir      <- "."
 proteomes_dir <- file.path(base_dir, "proteomes")
 blast_dir     <- file.path(base_dir, "blast")
 genes_dir     <- file.path(base_dir, "general")
-stats_dir     <- file.path(base_dir, "stats")
 hits_dir      <- file.path(base_dir, "hits")
 faa_dir       <- file.path(proteomes_dir, "aa_hits")
 ```
