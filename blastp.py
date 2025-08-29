@@ -22,13 +22,15 @@ from Bio import SeqIO
 base_dir = "."
 proteomes_dir = os.path.join(base_dir, "proteomes")
 blast_dir = os.path.join(base_dir, "blast")
+db_dir = os.path.join(blast_dir, "db")
 genes_dir = os.path.join(base_dir, "general")
 stats_dir = os.path.join(base_dir, "stats")
 hits_dir = os.path.join(base_dir, "hits")
 faa_dir = os.path.join(proteomes_dir, "aa_hits")
 
 compilation_fasta = os.path.join(proteomes_dir, "compilation.fasta")
-blast_db_path = compilation_fasta.rsplit('.', 1)[0]
+fasta_basename = os.path.splitext(os.path.basename(compilation_fasta))[0]
+blast_db_path = os.path.join(db_dir, fasta_basename)
 query_files = [os.path.join(genes_dir, f) 
                for f in os.listdir(genes_dir) 
                if f.endswith((".fa", ".fasta"))]
@@ -40,15 +42,14 @@ def create_multifasta(input_dir, output_fasta, strain_list=None):
     """
     Combine proteome FASTA files into a single multi-FASTA file for BLASTP.
     
-    Attr:
+    Args:
         input_dir (str): Directory containing proteome FASTA files.
         output_fasta (str): Path to the output multi-FASTA file.
         strain_list (list, optional): List of strain names to include 
                                       (default: None).
     
     Returns:
-        None: Writes a combined multi-FASTA file and prints the number of 
-              proteomes processed.
+        None
     """
     n = 0
     with open(output_fasta, 'w') as out_f:
@@ -68,18 +69,21 @@ def create_multifasta(input_dir, output_fasta, strain_list=None):
     print(f"\nMulti-FASTA created with {n} proteome files.\n")
 
 
-def create_blast_db(fasta_path):
+def create_blast_db(fasta_path, db_dir):
     """
     Create a BLASTP database from a FASTA file.
-
-    Attr:
+    
+    Args:
         fasta_path (str): Path to the input FASTA file.
-
+        db_dir (str): Directory where the BLAST database will be stored.
+    
     Returns:
-        None: Runs makeblastdb to generate a BLAST database.
+        None
     """
     print("\nCreating BLASTP database...\n")
-    cmd = f"makeblastdb -in {fasta_path} -dbtype prot -out {fasta_path.rsplit('.',1)[0]}"
+    fasta_basename = os.path.splitext(os.path.basename(fasta_path))[0]
+    output_path = os.path.join(db_dir, fasta_basename)
+    cmd = f"makeblastdb -in {fasta_path} -dbtype prot -out {output_path}"
     result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     if result.returncode == 0:
         print("BLASTP database created successfully.")
@@ -91,14 +95,14 @@ def create_blast_db(fasta_path):
 def run_blastp(query, db, output):
     """
     Run BLASTP search with a query against a protein database.
-
-    Attr:
+    
+    Args:
         query (str): Path to the query FASTA file.
         db (str): Path to the BLAST database (without extension).
         output (str): Path to the BLAST results file (TSV).
-
+    
     Returns:
-        None: Executes BLASTP and writes results with a custom header.
+        None
     """
     print("Running BLASTP...")
 
@@ -147,14 +151,14 @@ def run_blastp(query, db, output):
 def filter_blast_results(blast_file, output_dir, identity_cutoff=90.0):
     """
     Filter BLASTP results by identity and split into per-strain files.
-
-    Attr:
+    
+    Args:
         blast_file (str): Path to the BLAST results file (TSV).
         output_dir (str): Directory where filtered results will be saved.
         identity_cutoff (float, optional): Identity threshold (default: 90.0).
-
+    
     Returns:
-        None: Writes per-strain TSV files containing hits above the cutoff.
+        None
     """
     print(f"\nFiltering results with identity ≥ {identity_cutoff}%...\n")
     os.makedirs(output_dir, exist_ok=True)
@@ -192,15 +196,15 @@ def extract_hit_sequences(
         blast_dir: str, multifasta: str, output_dir: str) -> None:
     """
     Extract sequences of BLASTP hits into strain-specific FASTA files.
-
-    Attr:
+    
+    Args:
         blast_dir (str): Directory containing filtered per-strain BLAST result 
                          TSVs.
         multifasta (str): Path to the combined multi-FASTA file.
         output_dir (str): Directory to save strain-specific FASTA files.
-
+    
     Returns:
-        None: Writes FASTA files for each strain containing hit sequences.
+        None
     """
     print("\nExtracting protein sequences from filtered hits...\n")
     os.makedirs(output_dir, exist_ok=True)
@@ -234,7 +238,7 @@ def extract_hit_sequences(
 if __name__ == '__main__':
     print("\nStarting BLASTP pipeline...\n")
     create_multifasta(proteomes_dir, compilation_fasta)
-    create_blast_db(compilation_fasta)
+    create_blast_db(compilation_fasta, db_dir)
     for query_file in query_files:
         query_name = os.path.splitext(os.path.basename(query_file))[0]
     
